@@ -1,5 +1,8 @@
 require 'sqlite3'
 require 'singleton'
+require 'byebug'
+require 'active_support'
+
 
 class QuestionsDBConnection < SQLite3::Database
   include Singleton
@@ -19,24 +22,82 @@ end
 
 
 
+include ActiveSupport::Inflector
 class ModelBase
-  attr_reader :table_name
-
-  def initialize(table_name, options)
-    @table_name = table_name
-    @options = options
-  end
 
   def self.find_by_id(id)
     data = QuestionsDBConnection.instance.execute(<<-SQL, id)
     SELECT
       *
     FROM
-      #{self.table_name}
+      #{tableize(self.to_s)}
     WHERE
       id = ?
     SQL
     self.new(data.first)
+  end
+
+  def self.all
+    data = QuestionsDBConnection.instance.execute(<<-SQL)
+    SELECT
+      *
+    FROM
+      #{tableize(self.to_s)}
+    SQL
+    data.map { |datum| self.new(datum) }
+  end
+
+  def save
+    if self.id
+      update
+    else
+      insert
+      self.id = QuestionsDBConnection.instance.last_insert_row_id
+    end
+  end
+
+  private
+
+  def get_table_name
+    tableize(self.class.to_s)
+  end
+
+  def fields
+    self.instance_variables.map { |v| v.to_s[1..-1] }.reject { |s| s == 'id'}
+  end
+
+  def fields_values
+    self.instance_variables.reject { |v| v == :@id }.map { |var| self.send(var[1..-1].to_sym) }
+  end
+
+  def value_questions
+    (['?'] * fields.length).join(", ")
+  end
+
+  def fields_string
+    fields.join(", ")
+  end
+
+  def field_set_string
+    fields.map! do |field|
+      field.concat(" = ?")
+    end.join(", ")
+  end
+
+  def insert
+    QuestionsDBConnection.instance.execute(<<-SQL, fields_values)
+    INSERT INTO #{get_table_name} (#{fields_string})
+    VALUES
+      (#{value_questions})
+    SQL
+  end
+
+  def update
+    QuestionsDBConnection.instance.execute(<<-SQL, fields_values, self.id)
+    UPDATE #{get_table_name}
+    SET #{field_set_string}
+    WHERE id = ?
+    SQL
   end
 end
 
@@ -50,21 +111,9 @@ end
 
 
 
-class User
-  attr_accessor :fname, :lname
-  attr_reader :id
+class User < ModelBase
+  attr_accessor :fname, :lname, :id
 
-  def self.find_by_id(id)
-    data = QuestionsDBConnection.instance.execute(<<-SQL, id)
-    SELECT
-      *
-    FROM
-      users
-    WHERE
-      id = ?
-    SQL
-    self.new(data.first)
-  end
 
   def self.find_by_name(fname, lname)
     data = QuestionsDBConnection.instance.execute(<<-SQL, fname, lname)
@@ -81,10 +130,9 @@ class User
   end
 
   def initialize(options)
-    super('user', options)
-    @id = options['id']
     @fname = options['fname']
     @lname = options['lname']
+    @id = options['id']
   end
 
   def authored_questions
@@ -118,32 +166,6 @@ class User
     data.first['avg_karma']
   end
 
-  def save
-    if @id
-      update
-    else
-      insert
-      @id = QuestionsDBConnection.instance.last_insert_row_id
-    end
-  end
-
-  private
-
-  def insert
-    QuestionsDBConnection.instance.execute(<<-SQL, @fname, @lname)
-    INSERT INTO users (fname, lname)
-    VALUES
-      (?, ?)
-    SQL
-  end
-
-  def update
-    QuestionsDBConnection.instance.execute(<<-SQL, @fname, @lname, @id)
-    UPDATE users
-    SET fname = ?, lname = ?
-    WHERE id = ?
-    SQL
-  end
 end
 
 
@@ -152,7 +174,7 @@ end
 
 
 
-class Question
+class Question < ModelBase
   attr_accessor :title, :body, :author_id
   attr_reader :id
 
@@ -226,7 +248,7 @@ end
 
 
 
-class Reply
+class Reply < ModelBase
   attr_accessor :parent_id, :body, :author_id, :subject_id
   attr_reader :id
 
@@ -313,7 +335,7 @@ end
 
 
 
-class QuestionFollow
+class QuestionFollow < ModelBase
   attr_accessor :question_id, :user_id
   attr_reader :id
 
@@ -388,7 +410,7 @@ end
 
 
 
-class QuestionLike
+class QuestionLike < ModelBase
   attr_accessor :question_id, :user_id
   attr_reader :id
 
